@@ -1,0 +1,219 @@
+---
+- hosts: web
+  become: true
+  tasks:
+# Подготовка
+
+  - name: Установим epel
+    yum:
+      name:
+      - epel-release
+      
+  - name: Ставим кучу пакетов
+    yum:
+      name: "{{ packages }}"
+      state: present
+    vars:
+      packages:
+      - nano
+      - mc    
+      - nginx
+      - gcc
+      - python-pip
+      - python-devel
+      - libselinux-python
+      - unzip
+      - git
+      - sqlite-devel    
+
+  - name: Обновить pip
+    pip:
+      name: pip
+      state: forcereinstall
+
+  - name: Обновить setuptools
+    pip:
+      name: setuptools
+      state: forcereinstall
+
+  - name: Установим SELinux в permissive режим
+    selinux:
+      policy: targeted
+      state: permissive
+    notify:
+      - system restart
+
+# GO будет доступен http://192.168.100.10:8081
+
+  - git:
+      repo: 'https://github.com/geetarista/go-http-hello-world.git'
+      dest: '/root/go-http-hello-world'
+      force: yes
+
+  - name: copy exe
+    get_url: 
+      url: 'https://raw.githubusercontent.com/perhamm/go-http-hello-world/master/hello_world/hello_world'
+      validate_certs: no
+      dest: '/root/go-http-hello-world/hello_world/hello_world'
+      owner: root
+      group: root
+      mode: '0755'
+
+  - name: copy config
+    copy: 
+      src: "{{ item.src }}"
+      dest: "{{ item.dest }}"
+      owner: root
+      group: root
+      mode: '0644'
+    with_items:
+      - { src: 'go/go.service', dest: '/etc/systemd/system/' }
+      - { src: 'go/go.conf', dest: '/etc/nginx/conf.d/' }
+
+  - name: daemon started
+    systemd:
+      name: go
+      state: started
+      enabled: yes
+
+  - name: Рестартуем Nginx
+    systemd:
+      name: nginx
+      state: restarted
+      enabled: yes
+
+# REACT будет доступен http://192.168.100.10:8082
+
+  - name: Создадим директорию под React
+    file:
+      path: /var/www/react
+      state: directory
+      mode: '0755'
+      owner: nginx
+      group: root
+
+  - name: Выгрузим репозиторий
+    shell: curl -sL https://rpm.nodesource.com/setup_10.x | bash -
+
+  - name: Установим NODEJS
+    yum:
+      name: nodejs
+      state: present
+
+  - name: Создадим приложение react
+    shell: |
+      cd /tmp
+      npm install -g create-react-app
+      create-react-app hello-world
+
+  - name: Копируем файлы
+    copy: src=react/App.js dest=/tmp/hello-world/src/App.js
+
+  - name: Собираем
+    shell: |
+      cd /tmp/hello-world
+      npm run build
+
+  - name: Копируем проект в директорию react
+    copy:
+      src: /tmp/hello-world/build/
+      dest: /var/www/react
+      remote_src: yes
+
+  - name: Копируем наш конфиг для ningx
+    copy: src=react/react.conf dest=/etc/nginx/conf.d/react.conf
+    
+  - name: Пропишем права на директорию react
+    file:
+      path: /var/www/react
+      state: directory
+      recurse: yes
+      owner: nginx
+      group: nginx
+
+  - name: Рестартуем Nginx
+    systemd:
+      name: nginx
+      state: restarted
+      enabled: yes
+  
+#DJANGO   будет доступен http://192.168.100.10:8083
+
+  - name: Установим Django-pip
+    pip:
+      name: Django
+
+  - name: Установим Uwsgi-pip
+    pip:
+      name: uwsgi
+
+  - name: ДОбавим пользователя Django
+    user:
+      name: django
+      group: nginx
+      shell: /bin/bash
+      home: /var/www/django
+      system: yes
+
+  - name: Добавим директорию под проект Django
+    file:
+      path: /var/www/django
+      state: directory
+      mode: '0770'
+      owner: django
+      group: nginx
+
+  - name: Запускаем проект Django
+    shell: |
+      cd /var/www/django
+      touch testfile.txt
+      django-admin startproject homework
+      cd /var/www/django/homework
+      python manage.py migrate
+    become_user: django
+
+  - name: Разрешаем подключение к django
+    lineinfile:
+      path: /var/www/django/homework/homework/settings.py
+      regexp: '^ALLOWED_HOSTS'
+      line: "ALLOWED_HOSTS = ['192.168.100.10']"
+    become_user: django
+
+  - name: Uwsgi directory
+    file:
+      path: /etc/uwsgi/sites
+      state: directory
+      mode: '0755'
+      owner: root
+      group: root
+
+  - name: Uwsgi config
+    copy: src=jango/homework.ini dest=/etc/uwsgi/sites/homework.ini
+
+  - name: Uwsgi systemd
+    copy: src=jango/uwsgi.service dest=/etc/systemd/system/uwsgi.service
+
+  - name: Uwsgi restart
+    systemd:
+      name: uwsgi
+      state: restarted
+      daemon-reload: yes
+      enabled: yes
+
+  - name: Uwsgi config for nginx
+    copy: src=jango/uwsgi.conf dest=/etc/nginx/conf.d/uwsgi.conf
+
+  - name: Nginx restart
+    systemd:
+      name: nginx
+      state: restarted
+      enabled: yes
+
+  handlers:
+  - name: system restart
+    reboot:
+        reboot_timeout: 100
+
+
+    
+    
